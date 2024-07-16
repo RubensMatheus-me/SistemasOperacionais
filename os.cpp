@@ -17,6 +17,8 @@ namespace OS {
 Arch::Terminal *terminalTeste;
 Arch::Cpu *cpuTeste;
 
+static std::string bufferedChar;
+
 void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 {	
 	terminalTeste = terminal;
@@ -28,15 +30,46 @@ void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 
 // ---------------------------------------
 
-void interrupt (const Arch::InterruptCode interrupt){
-	
-	
-	if(interrupt == Arch::InterruptCode::Keyboard) {
-		int typed_char = terminalTeste->read_typed_char();
-		char char_typed = static_cast<char>(typed_char);
-					
-	}
+void interrupt(const Arch::InterruptCode interrupt) {
+    if (interrupt == Arch::InterruptCode::Keyboard) {
+        int typed_char = terminalTeste->read_typed_char();
+        char char_typed = static_cast<char>(typed_char);
+
+        if (terminalTeste->is_backspace(typed_char)) {
+            if (!bufferedChar.empty()) {
+            
+                bufferedChar.pop_back();
+
+                terminalTeste->print(Arch::Terminal::Type::Command, '\b'); 
+                terminalTeste->print(Arch::Terminal::Type::Command, ' '); 
+                terminalTeste->print(Arch::Terminal::Type::Command, '\b'); 
+            }
+            terminalTeste->println(Arch::Terminal::Type::Kernel, "apagar");
+        }
+
+        else if (terminalTeste->is_alpha(typed_char) || terminalTeste->is_num(typed_char)) {
+ 
+            bufferedChar += char_typed;
+
+            terminalTeste->print(Arch::Terminal::Type::Command, char_typed);
+        }
+
+        else if (terminalTeste->is_return(typed_char)) {
+
+            for (size_t i = 0; i < bufferedChar.size(); ++i) {
+                terminalTeste->print(Arch::Terminal::Type::Command, '\b'); 
+                terminalTeste->print(Arch::Terminal::Type::Command, ' ');  
+                terminalTeste->print(Arch::Terminal::Type::Command, '\b'); 
+            }
+
+            terminalTeste->println(Arch::Terminal::Type::Kernel, "enter");
+            terminalTeste->print(Arch::Terminal::Type::App, bufferedChar);
+            terminalTeste->println(Arch::Terminal::Type::App, "");
+            bufferedChar.clear();
+        }
+    }
 }
+
 
 // ---------------------------------------
 
