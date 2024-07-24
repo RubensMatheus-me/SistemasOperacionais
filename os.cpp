@@ -61,10 +61,10 @@ void interrupt(const Arch::InterruptCode interrupt) {
             
             if (bufferedChar == "quit") {
             	cpuSystem->Cpu::turn_off();
-            }
+            } else {
+		syscall();
+	    }
             bufferedChar.clear(); 
-            
-            const uint16_t binario = load_from_disk_to_16bit_buffer ("binario");
         }
     }
 }
@@ -73,19 +73,38 @@ void interrupt(const Arch::InterruptCode interrupt) {
 // ---------------------------------------
 
 void syscall () {
-    const uint16_t syscall_code = cpuSystem->get_gpr(0); 
-    switch (syscall_code) {
+    uint16_t r0 = cpuSystem->get_gpr(0);
+    uint16_t r1 = cpuSystem->get_gpr(1);
+    uint16_t r2 = cpuSystem->get_gpr(2);
+    uint16_t r3 = cpuSystem->get_gpr(3);
+
+    switch (r0) {
         case 0:
-            terminalSystem->print(Arch::Terminal::Type::App, "Syscall 0 executado");
+            cpuSystem->Cpu::turn_off();
             break;
-        case 1:
-            terminalSystem->print(Arch::Terminal::Type::App, "Syscall 1 executado");
-            break;
-        default:
-            terminalSystem->println(Arch::Terminal::Type::Kernel, "Syscall desconhecido: ");
-            break;
+        case 1: {
+           uint16_t addr = r1;
+	   std::string str;
+	   char c;
+	//memoria fisica
+	   while ((c = static_cast<char>(cpuSystem->pmem_read(addr++))) != '\0') {
+	        str += c;
 	}
-	cpuSystem->set_gpr(1, 42);
+            terminalSystem->println(Arch::Terminal::Type::App, str);
+            break;
+        }
+        case 2:
+            terminalSystem->println(Arch::Terminal::Type::App, "");
+            break;
+        case 3: {
+            int number = r1;
+            terminalSystem->println(Arch::Terminal::Type::App, number);
+            break;
+        }
+        default:
+            terminalSystem->println(Arch::Terminal::Type::Kernel, "Unknown syscall");
+            break;
+    }
 }
 
 // ---------------------------------------
