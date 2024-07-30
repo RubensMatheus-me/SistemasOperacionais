@@ -26,8 +26,15 @@ void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 	terminal->println(Arch::Terminal::Type::Command, "Type commands here");
 	terminal->println(Arch::Terminal::Type::App, "Apps output here");
 	terminal->println(Arch::Terminal::Type::Kernel, "Kernel output here");
-}
-
+	
+	std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer("binario.bin");
+	
+	for(uint16_t i = 0; i < loadBinary.size(); i++) {
+		terminalSystem->println(Arch::Terminal::Type::App, i, "- ", loadBinary[i]);
+		cpuSystem->pmem_write(i ,loadBinary[i]);
+	}
+	
+ }
 // ---------------------------------------
 
 void interrupt(const Arch::InterruptCode interrupt) {
@@ -61,11 +68,10 @@ void interrupt(const Arch::InterruptCode interrupt) {
             
             if (bufferedChar == "quit") {
             	cpuSystem->Cpu::turn_off();
-            } else {
-		syscall();
-	    }
+            }
             bufferedChar.clear(); 
         }
+       
     }
 }
 
@@ -74,31 +80,28 @@ void interrupt(const Arch::InterruptCode interrupt) {
 
 void syscall () {
     uint16_t r0 = cpuSystem->get_gpr(0);
-    uint16_t r1 = cpuSystem->get_gpr(1);
-    uint16_t r2 = cpuSystem->get_gpr(2);
-    uint16_t r3 = cpuSystem->get_gpr(3);
 
     switch (r0) {
         case 0:
             cpuSystem->Cpu::turn_off();
             break;
         case 1: {
-           uint16_t addr = r1;
-	   std::string str;
-	   char c;
-	//memoria fisica
+           uint16_t addr = cpuSystem->get_gpr(1);
+		   std::string str;
+		   char c;
+			//Memoria fisica
 	   while ((c = static_cast<char>(cpuSystem->pmem_read(addr++))) != '\0') {
 	        str += c;
-	}
-            terminalSystem->println(Arch::Terminal::Type::App, str);
+		}
+            terminalSystem->print(Arch::Terminal::Type::App, str);
             break;
         }
         case 2:
             terminalSystem->println(Arch::Terminal::Type::App, "");
             break;
         case 3: {
-            int number = r1;
-            terminalSystem->println(Arch::Terminal::Type::App, number);
+            int number = cpuSystem->get_gpr(1);
+            terminalSystem->print(Arch::Terminal::Type::App, number);
             break;
         }
         default:
