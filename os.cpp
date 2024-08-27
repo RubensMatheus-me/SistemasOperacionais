@@ -10,6 +10,11 @@
 #include "arq-sim.h"
 #include "os.h"
 
+struct process {//bl pc
+	uint16_t limitBase;
+	uint16_t limitBaseEnd;
+	uint16_t pc;
+}Process;
 
 namespace OS {
 
@@ -23,6 +28,10 @@ void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 {	
 	terminalSystem = terminal;
 	cpuSystem = cpu;
+	//Process.limitBase = cpuSystem->set_vmem_paddr_init(0);
+	cpuSystem->set_vmem_paddr_init(0); // temos 10 base - length
+	cpuSystem->set_vmem_paddr_end(21);
+	cpuSystem->pmem_read(200);
 	terminal->println(Arch::Terminal::Type::Command, "Type commands here");
 	terminal->println(Arch::Terminal::Type::App, "Apps output here");
 	terminal->println(Arch::Terminal::Type::Kernel, "Kernel output here");
@@ -38,6 +47,10 @@ void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 // ---------------------------------------
 
 void interrupt(const Arch::InterruptCode interrupt) {
+	if(interrupt == Arch::InterruptCode::GPF) {
+		terminalSystem->print(Arch::Terminal::Type::App, "ERR");
+	}
+	
     if (interrupt == Arch::InterruptCode::Keyboard) {
         int typed_char = terminalSystem->read_typed_char();
         char char_typed = static_cast<char>(typed_char);
@@ -108,7 +121,9 @@ void syscall () {
             terminalSystem->println(Arch::Terminal::Type::Kernel, "Unknown syscall");
             break;
     }
-}
+};
+
+
 
 // ---------------------------------------
 
