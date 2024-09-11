@@ -11,10 +11,10 @@
 #include "os.h"
 
 struct process {//bl pc
-	uint16_t limitBase;
-	uint16_t limitBaseEnd;
+	uint16_t base;
+	uint16_t limit;
 	uint16_t pc;
-}Process;
+}process;
 
 namespace OS {
 
@@ -24,31 +24,65 @@ Arch::Cpu *cpuSystem;
 
 static std::string bufferedChar;
 
+uint16_t get_process_limit(const std::string_view fname) {
+    uint32_t file_size_words = Lib::get_file_size_words(fname);
+    
+    if (file_size_words > 65535) {  //valor máximo de uint16_t
+        throw std::runtime_error("O arquivo excedeu o limite maximo da memoria no proceso");
+    }
+    
+    return static_cast<uint16_t>(file_size_words);
+}
+
+void load_program(const std::string_view binary_file) {
+    process.base = 0;
+    process.limit = get_process_limit(binary_file);
+
+    cpuSystem->set_vmem_paddr_init(process.base);
+    cpuSystem->set_vmem_paddr_end(process.base + process.limit);
+    
+    std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer(binary_file);
+
 void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 {	
 	terminalSystem = terminal;
 	cpuSystem = cpu;
-	//Process.limitBase = cpuSystem->set_vmem_paddr_init(0);
-	cpuSystem->set_vmem_paddr_init(0); // temos 10 base - length
-	cpuSystem->set_vmem_paddr_end(21);
-	cpuSystem->pmem_read(200);
+	
+	 const std::string_view binary_file = "binario.bin";
+	
+	process.base = 0;
+	process.limit = get_process_limit(binary_file);
+
+	cpuSystem->set_vmem_paddr_init(process.base);
+	cpuSystem->set_vmem_paddr_end(process.base + process.limit);
+	
 	terminal->println(Arch::Terminal::Type::Command, "Type commands here");
 	terminal->println(Arch::Terminal::Type::App, "Apps output here");
 	terminal->println(Arch::Terminal::Type::Kernel, "Kernel output here");
 	
-	std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer("binario.bin");
+	std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer(binary_file);
 	
-	for(uint16_t i = 0; i < loadBinary.size(); i++) {
+	for (uint16_t i = 0; i < loadBinary.size(); ++i) {
+		if (i + process.base >= process.limit) { 
+		    terminalSystem->println(Arch::Terminal::Type::Kernel, "Binário passou a memória limite");
+		    break;
+		}
 		terminalSystem->println(Arch::Terminal::Type::App, i, "- ", loadBinary[i]);
-		cpuSystem->pmem_write(i ,loadBinary[i]);
+		cpuSystem->pmem_write(i + process.base, loadBinary[i]); 
 	}
-	
- }
+}
+ 
+void kill_process {
+	cpuSystem->set_vmem_paddr_init(0);
+	cpuSystem->set_vmem_paddr_end(0);
+}
+
 // ---------------------------------------
 
 void interrupt(const Arch::InterruptCode interrupt) {
 	if(interrupt == Arch::InterruptCode::GPF) {
-		terminalSystem->print(Arch::Terminal::Type::App, "ERR");
+		terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral, matando o processo.");
+		kill_process();
 	}
 	
     if (interrupt == Arch::InterruptCode::Keyboard) {
@@ -79,9 +113,15 @@ void interrupt(const Arch::InterruptCode interrupt) {
             terminalSystem->print(Arch::Terminal::Type::App, bufferedChar);
             terminalSystem->println(Arch::Terminal::Type::App, "");
             
-            if (bufferedChar == "quit") {
-            	cpuSystem->Cpu::turn_off();
+            if (bufferedChar.rfind("load ", 0) == 0) { // comando load <filename>
+                std::string_view filename = bufferedChar.substr(5);
+                load_program(filename);
+            } else if (bufferedChar == "killprocess") {
+                kill_process();
+            } else if (bufferedChar == "quit") {
+                cpuSystem->Cpu::turn_off();
             }
+            
             bufferedChar.clear(); 
         }
        
@@ -91,7 +131,7 @@ void interrupt(const Arch::InterruptCode interrupt) {
 
 // ---------------------------------------
 
-void syscall () {
+void syscall() {
     uint16_t r0 = cpuSystem->get_gpr(0);
 
     switch (r0) {
@@ -99,14 +139,18 @@ void syscall () {
             cpuSystem->Cpu::turn_off();
             break;
         case 1: {
-           uint16_t addr = cpuSystem->get_gpr(1);
-		   std::string str;
-		   char c;
-			//Memoria fisica
-	   while ((c = static_cast<char>(cpuSystem->pmem_read(addr++))) != '\0') {
-	        str += c;
-		}
-            terminalSystem->print(Arch::Terminal::Type::App, str);
+            uint16_t addr = cpuSystem->get_gpr(1);
+             if (addr >= process.base && addr < process.base + process.limit) {
+                std::string str;
+                char c;
+                while ((c = static_cast<char>(cpuSystem->pmem_read(addr))) != '\0') {
+                    str += c;
+                    addr++;
+                }
+                terminalSystem->print(Arch::Terminal::Type::App, str);
+            } else {
+                terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Address out of bounds.");
+            }
             break;
         }
         case 2:
@@ -121,7 +165,8 @@ void syscall () {
             terminalSystem->println(Arch::Terminal::Type::Kernel, "Unknown syscall");
             break;
     }
-};
+}
+
 
 
 
