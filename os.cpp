@@ -10,10 +10,13 @@
 #include "arq-sim.h"
 #include "os.h"
 
+
 struct process {//bl pc
 	uint16_t base;
 	uint16_t limit;
 	uint16_t pc;
+	size_t pid;
+	std::array<uint16_t, 8> registers; 
 }process;
 
 namespace OS {
@@ -22,12 +25,13 @@ namespace OS {
 Arch::Terminal *terminalSystem;
 Arch::Cpu *cpuSystem;
 
+uint32_t max_size = 65535;
 static std::string bufferedChar;
 
 uint16_t get_process_limit(const std::string_view fname) {
     uint32_t file_size_words = Lib::get_file_size_words(fname);
     
-    if (file_size_words > 65535) {  //valor máximo de uint16_t
+    if (file_size_words > max_size) { 
         throw std::runtime_error("O arquivo excedeu o limite maximo da memoria no proceso");
     }
     
@@ -42,19 +46,27 @@ void load_program(const std::string_view binary_file) {
     cpuSystem->set_vmem_paddr_end(process.base + process.limit);
     
     std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer(binary_file);
+}
+
+void execute_instruction() {
+	uint16_t instruction = cpuSystem->pmem_read(process.pc + process.base);
+	process.pc++;
+}
 
 void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
-{	
+{
 	terminalSystem = terminal;
 	cpuSystem = cpu;
 	
 	 const std::string_view binary_file = "binario.bin";
 	
+	process.pc = 0;
 	process.base = 0;
 	process.limit = get_process_limit(binary_file);
 
 	cpuSystem->set_vmem_paddr_init(process.base);
 	cpuSystem->set_vmem_paddr_end(process.base + process.limit);
+	
 	
 	terminal->println(Arch::Terminal::Type::Command, "Type commands here");
 	terminal->println(Arch::Terminal::Type::App, "Apps output here");
@@ -70,19 +82,39 @@ void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 		terminalSystem->println(Arch::Terminal::Type::App, i, "- ", loadBinary[i]);
 		cpuSystem->pmem_write(i + process.base, loadBinary[i]); 
 	}
+	
+	while (true) {
+        execute_instruction();
+        
+        if (process.pc >= process.limit) {
+            terminalSystem->println(Arch::Terminal::Type::Kernel, "Fim do programa.");
+            break;
+        }
+    }
 }
  
-void kill_process {
+void kill_process() {
 	cpuSystem->set_vmem_paddr_init(0);
 	cpuSystem->set_vmem_paddr_end(0);
 }
 
-// ---------------------------------------
+void info_process() {
+	terminalSystem->println(Arch::Terminal::Type::Kernel, "Informações do processo:");
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "PID: ", process.pid);
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "Base: ", process.base);
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "Limite: ", process.limit);
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "PC: ",  process.pc);
+    
+    for (size_t i = 0; i < process.registers.size(); ++i) {
+        terminalSystem->println(Arch::Terminal::Type::Command, "R", i, ": ", process.registers[i]);
+    }
+    
+}
+// ---------------------------------------	
 
 void interrupt(const Arch::InterruptCode interrupt) {
 	if(interrupt == Arch::InterruptCode::GPF) {
 		terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral, matando o processo.");
-		kill_process();
 	}
 	
     if (interrupt == Arch::InterruptCode::Keyboard) {
@@ -113,11 +145,14 @@ void interrupt(const Arch::InterruptCode interrupt) {
             terminalSystem->print(Arch::Terminal::Type::App, bufferedChar);
             terminalSystem->println(Arch::Terminal::Type::App, "");
             
-            if (bufferedChar.rfind("load ", 0) == 0) { // comando load <filename>
-                std::string_view filename = bufferedChar.substr(5);
+            if (bufferedChar.rfind("load", 0) == 0) { 
+                std::string_view filename = bufferedChar.substr(4) + ".bin";
+                
                 load_program(filename);
             } else if (bufferedChar == "killprocess") {
                 kill_process();
+            } else if (bufferedChar == "infoprocess") {
+                info_process();
             } else if (bufferedChar == "quit") {
                 cpuSystem->Cpu::turn_off();
             }
