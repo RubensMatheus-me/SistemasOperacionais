@@ -11,11 +11,12 @@
 #include "os.h"
 
 
-struct process {//bl pc
+struct process {
 	uint16_t base;
 	uint16_t limit;
 	uint16_t pc;
 	size_t pid;
+    bool active;
 	std::array<uint16_t, 8> registers; 
 }process;
 
@@ -25,7 +26,7 @@ namespace OS {
 Arch::Terminal *terminalSystem;
 Arch::Cpu *cpuSystem;
 
-uint32_t max_size = 65535;
+uint16_t max_size = 65535;
 static std::string bufferedChar;
 
 uint16_t get_process_limit(const std::string_view fname) {
@@ -41,6 +42,8 @@ uint16_t get_process_limit(const std::string_view fname) {
 void load_program(const std::string_view binary_file) {
     process.base = 0;
     process.limit = get_process_limit(binary_file);
+    process.pc = 0;
+    process.active = true;
 
     cpuSystem->set_vmem_paddr_init(process.base);
     cpuSystem->set_vmem_paddr_end(process.base + process.limit);
@@ -49,6 +52,8 @@ void load_program(const std::string_view binary_file) {
 }
 
 void execute_instruction() {
+    if(!process.active) 
+        return;
 	uint16_t instruction = cpuSystem->pmem_read(process.pc + process.base);
 	process.pc++;
 }
@@ -58,7 +63,7 @@ void boot (Arch::Terminal *terminal, Arch::Cpu *cpu)
 	terminalSystem = terminal;
 	cpuSystem = cpu;
 	
-	 const std::string_view binary_file = "binario.bin";
+	const std::string_view binary_file = "idle.bin";
 	
 	process.pc = 0;
 	process.base = 0;
@@ -114,7 +119,9 @@ void info_process() {
 
 void interrupt(const Arch::InterruptCode interrupt) {
 	if(interrupt == Arch::InterruptCode::GPF) {
-		terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral, matando o processo.");
+		terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral, finalizando o processo.");
+        process.active = false;
+        return;
 	}
 	
     if (interrupt == Arch::InterruptCode::Keyboard) {
@@ -201,8 +208,6 @@ void syscall() {
             break;
     }
 }
-
-
 
 
 // ---------------------------------------
