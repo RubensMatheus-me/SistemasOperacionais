@@ -36,7 +36,7 @@ uint16_t get_process_limit(const std::string_view fname) {
     uint32_t file_size_words = Lib::get_file_size_words(fname);
     
     if (file_size_words > max_size) { 
-        throw std::runtime_error("O arquivo excedeu o limite máximo da memória do processo.");
+        throw std::runtime_error("O arquivo excedeu o limite mÃ¡ximo da memÃ³ria do processo.");
     }
     
     return static_cast<uint16_t>(file_size_words);
@@ -48,7 +48,7 @@ void reset_cpu_state() {
     }
 
     cpuSystem->set_vmem_paddr_init(0);
-    cpuSystem->set_vmem_paddr_end(0);
+    cpuSystem->set_vmem_paddr_end(-1);
 
     cpuSystem->set_pc(0);
 }
@@ -61,7 +61,7 @@ uint16_t allocate_base(uint16_t required_limit) {
         }
     }
     if (last_process_end + required_limit > max_size) {
-        throw std::runtime_error("Memória insuficiente para o próximo processo.");
+        throw std::runtime_error("MemÃ³ria insuficiente para o prÃ³ximo processo.");
     }
     return last_process_end;
 }
@@ -74,6 +74,7 @@ void vmem_write(uint16_t addr, uint16_t value, const Process& proc) {
     cpuSystem->pmem_write(addr, value);
 }
 
+//MemÃ³ria
 uint16_t vmem_read(uint16_t addr, const Process& proc) {
     if (addr < proc.base || addr >= proc.base + proc.limit) {
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Address out of bounds.");
@@ -88,11 +89,13 @@ void kill_process(Process& proc) {
     for (uint16_t i = 0; i < proc.limit; ++i) {
         vmem_write(i + proc.base, 0, proc);
     }
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "Finalizando o processo ativo");
     proc.active = false;
     reset_cpu_state();
 }
 
 void load_program(const std::string_view binary_file) {
+    reset_cpu_state();
     if (!process_table.empty() && process_table.back().active) {
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Finalizando o processo ativo antes de carregar um novo.");
         kill_process(process_table.back());
@@ -109,13 +112,12 @@ void load_program(const std::string_view binary_file) {
 
     for (uint16_t i = 0; i < loadBinary.size(); ++i) {
         if (i + new_process.base >= new_process.base + new_process.limit) {
-            terminalSystem->println(Arch::Terminal::Type::Kernel, "Binário passou a memória limite.");
+            terminalSystem->println(Arch::Terminal::Type::Kernel, "BinÃ¡rio passou a memÃ³ria limite.");
             break;
         }
         terminalSystem->println(Arch::Terminal::Type::App, i, "- ", loadBinary[i]);
         vmem_write(i + new_process.base, loadBinary[i], new_process);
     }
-
     cpuSystem->set_vmem_paddr_init(new_process.base); 
     cpuSystem->set_vmem_paddr_end(new_process.base + new_process.limit);
 
@@ -129,6 +131,7 @@ void boot(Arch::Terminal *terminal, Arch::Cpu *cpu) {
     
     const std::string_view binary_file = "idle.bin";
     load_program(binary_file);
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "idle.bin em processo...");
     
     terminal->println(Arch::Terminal::Type::Command, "Type commands here");
     terminal->println(Arch::Terminal::Type::App, "Apps output here");
@@ -137,20 +140,20 @@ void boot(Arch::Terminal *terminal, Arch::Cpu *cpu) {
 
 
 void info_process() {
-    terminalSystem->println(Arch::Terminal::Type::Kernel, "Informações do processo:");
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "InformaÃ§Ãµes do processo:");
     if (!process_table.empty()) {
         const Process& proc = process_table.back();
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Base: ", proc.base);
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Limite: ", proc.limit);
         terminalSystem->println(Arch::Terminal::Type::Kernel, "PC: ",  proc.pc);
     } else {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Nenhum processo em execução.");
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Nenhum processo em execuÃ§Ã£o.");
     }
 }
 
 void interrupt(const Arch::InterruptCode interrupt) {
     if (interrupt == Arch::InterruptCode::GPF) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral de proteção (GPF). Finalizando o processo.");
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral de proteÃ§Ã£o (GPF). Finalizando o processo.");
 
         if (!process_table.empty() && process_table.back().active) {
             kill_process(process_table.back());
