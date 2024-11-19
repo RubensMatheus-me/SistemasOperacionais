@@ -11,6 +11,9 @@
 #include "arq-sim.h"
 #include "os.h"
 
+
+#define PAGE_SIZE 4096 //4KB
+
 struct Process {
     uint16_t base;
     uint16_t limit;
@@ -18,6 +21,8 @@ struct Process {
     size_t pid;
     bool active;
     std::array<uint16_t, 8> registers; 
+    std::vector<uint16_t> page_table;
+    uint16_t sleep_time;
 };
 
 namespace OS {
@@ -28,6 +33,8 @@ Arch::Terminal *terminalSystem;
 Arch::Cpu *cpuSystem;
 
 uint16_t max_size = 65535;
+uint32_t uptime_seconds = 0;
+
 static std::string bufferedChar;
 
 std::vector<Process> process_table;  
@@ -41,6 +48,8 @@ uint16_t get_process_limit(const std::string_view fname) {
     
     return static_cast<uint16_t>(file_size_words);
 }
+
+
 
 void reset_cpu_state() {
     for (uint16_t i = 0; i < Config::nregs; i++) {
@@ -65,23 +74,91 @@ uint16_t allocate_base(uint16_t required_limit) {
     }
     return last_process_end;
 }
+	
+void sleep_process(uint16_t seconds) {
+    Process& proc = process_table.back();
+    proc.sleep_time = seconds;
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "Processo vai dormir por ", seconds, " segundos.");
+
+    proc.active = false;
+}
+
+uint32_t get_uptime() {
+    return uptime_seconds;
+}
+
+uint16_t allocate_physical_frame() {
+    static uint16_t next_frame = 0;
+    return next_frame++; 
+}
+
+uint16_t allocate_pages(uint16_t required_limit, Process& proc) {
+    uint16_t num_pages = (required_limit + PAGE_SIZE - 1) / PAGE_SIZE;  
+
+    uint16_t last_process_end = 0;
+    for (const auto& p : process_table) {
+        if (p.active) {
+            last_process_end = std::max(last_process_end, static_cast<uint16_t>(p.base + p.limit));
+        }
+    }
+
+    if (last_process_end + num_pages * PAGE_SIZE > max_size) {
+        throw std::runtime_error("Memória insuficiente para o próximo processo.");
+    }
+
+
+    for (uint16_t i = 0; i < num_pages; ++i) {
+        uint16_t physical_page = allocate_physical_frame();  
+        proc.page_table.push_back(physical_page);  
+    }
+
+    proc.limit = num_pages * PAGE_SIZE;  
+    return last_process_end;
+}
+
+void check_sleep() {
+    uint32_t current_time = get_uptime();
+    for (auto& proc : process_table) {
+        if (proc.active == false && proc.sleep_time > 0) {
+            if (current_time >= proc.sleep_time) {
+                proc.sleep_time = 0; 
+                proc.active = true;   
+                terminalSystem->println(Arch::Terminal::Type::Kernel, "Processo acordado.");
+            }
+        }
+    }
+}
 
 void vmem_write(uint16_t addr, uint16_t value, const Process& proc) {
-    if (addr < proc.base || addr >= proc.base + proc.limit) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Address out of bounds.");
+    uint16_t page_num = addr / PAGE_SIZE;
+    uint16_t offset = addr % PAGE_SIZE;
+
+    if (page_num >= proc.page_table.size()) {
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Page not mapped.");
         return; 
     }
-    cpuSystem->pmem_write(addr, value);
+
+    uint16_t physical_page_base = proc.page_table[page_num];
+    uint16_t physical_addr = physical_page_base + offset;
+
+    cpuSystem->pmem_write(physical_addr, value); 
 }
 
-//MemÃ³ria
 uint16_t vmem_read(uint16_t addr, const Process& proc) {
-    if (addr < proc.base || addr >= proc.base + proc.limit) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Address out of bounds.");
-        return 0;
+    uint16_t page_num = addr / PAGE_SIZE;
+    uint16_t offset = addr % PAGE_SIZE;
+
+    if (page_num >= proc.page_table.size()) {
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Page not mapped.");
+        return 0;  
     }
-    return cpuSystem->pmem_read(addr);
+
+    uint16_t physical_page_base = proc.page_table[page_num];
+    uint16_t physical_addr = physical_page_base + offset;
+
+    return cpuSystem->pmem_read(physical_addr);
 }
+
 
 void kill_process(Process& proc) {
     if (!proc.active) return;
@@ -112,13 +189,17 @@ void load_program(const std::string_view binary_file) {
 
     for (uint16_t i = 0; i < loadBinary.size(); ++i) {
         if (i + new_process.base >= new_process.base + new_process.limit) {
-            terminalSystem->println(Arch::Terminal::Type::Kernel, "BinÃ¡rio passou a memÃ³ria limite.");
+            terminalSystem->println(Arch::Terminal::Type::Kernel, "Binário passou a memória limite.");
             break;
         }
+
         terminalSystem->println(Arch::Terminal::Type::App, i, "- ", loadBinary[i]);
         vmem_write(i + new_process.base, loadBinary[i], new_process);
     }
-    cpuSystem->set_vmem_paddr_init(new_process.base); 
+
+    allocate_pages(new_process.limit, new_process);
+
+    cpuSystem->set_vmem_paddr_init(new_process.base);
     cpuSystem->set_vmem_paddr_end(new_process.base + new_process.limit);
 
     process_table.push_back(new_process);
@@ -152,6 +233,7 @@ void info_process() {
 }
 
 void interrupt(const Arch::InterruptCode interrupt) {
+		
     if (interrupt == Arch::InterruptCode::GPF) {
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral de proteÃ§Ã£o (GPF). Finalizando o processo.");
 
@@ -159,10 +241,22 @@ void interrupt(const Arch::InterruptCode interrupt) {
             kill_process(process_table.back());
         }
 
-        load_program("idle.bin");
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Processo idle.bin recarregado.");
+        if (process_table.empty()) {
+            load_program("idle.bin");
+            terminalSystem->println(Arch::Terminal::Type::Kernel, "Processo idle.bin recarregado.");
+        }
         return;
     }
+    if (interrupt == Arch::InterruptCode::Timer) {  
+        if (!process_table.empty() && process_table.back().sleep_time > 0) {
+            Process& proc = process_table.back();
+            proc.sleep_time--; 
+
+            if (proc.sleep_time == 0) {
+                proc.active = true;  
+            }
+        }
+   }
     if (interrupt == Arch::InterruptCode::Keyboard) {
         int typed_char = terminalSystem->read_typed_char();
         char char_typed = static_cast<char>(typed_char);
