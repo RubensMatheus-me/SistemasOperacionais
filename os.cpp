@@ -48,8 +48,6 @@ uint16_t get_process_limit(const std::string_view fname) {
     return static_cast<uint16_t>(file_size_words);
 }
 
-
-
 void reset_cpu_state() {
     for (uint16_t i = 0; i < Config::nregs; i++) {
         cpuSystem->set_gpr(i, 0);
@@ -139,13 +137,16 @@ uint16_t vmem_read(uint16_t addr, const Process& proc) {
 
 
 void kill_process(Process& proc) {
-    if (!proc.active) return;
+	terminalSystem->println(Arch::Terminal::Type::Kernel, proc.active);
+    //if (!proc.active) return; 
 
     terminalSystem->println(Arch::Terminal::Type::Kernel, "Finalizando o processo ativo");
-    proc.page_table.clear();
-    proc.active = false;
-    reset_cpu_state(); 
+
+    proc.page_table.clear();  
+    proc.active = false;   
+    reset_cpu_state();       
 }
+
 void load_program(const std::string_view binary_file) {
     reset_cpu_state();
     
@@ -154,15 +155,12 @@ void load_program(const std::string_view binary_file) {
         kill_process(process_table.back());
     }
 
-
     Process new_process;
     std::fill(new_process.registers.begin(), new_process.registers.end(), 0);
     std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer(binary_file);
 
-
     uint16_t required_limit = loadBinary.size();
     allocate_pages(required_limit, new_process);
-
 
     for (uint16_t i = 0; i < loadBinary.size(); ++i) {
         uint16_t page_num = i / PAGE_SIZE;
@@ -173,13 +171,11 @@ void load_program(const std::string_view binary_file) {
         cpuSystem->pmem_write(physical_addr, loadBinary[i]);
     }
 
-
     process_table.push_back(new_process);
 
     cpuSystem->set_vmem_paddr_init(new_process.page_table.front() * PAGE_SIZE);
     cpuSystem->set_vmem_paddr_end(new_process.page_table.back() * PAGE_SIZE + PAGE_SIZE - 1);
 }
-
 
 void boot(Arch::Terminal *terminal, Arch::Cpu *cpu) {
     terminalSystem = terminal;
@@ -261,9 +257,15 @@ void interrupt(const Arch::InterruptCode interrupt) {
                 std::string_view filename = bufferedChar.substr(4) + ".bin";
                 load_program(filename);
             } else if (bufferedChar == "killprocess") {
-                if (!process_table.empty()) {
-                    kill_process(process_table.back());
-                }
+
+			if (!process_table.empty()) {
+				terminalSystem->println(Arch::Terminal::Type::Kernel, "Comando killprocess recebido");
+				terminalSystem->println(Arch::Terminal::Type::Kernel, "Número de processos: ", process_table.size());
+				kill_process(process_table.back());
+			} else {
+				terminalSystem->println(Arch::Terminal::Type::Kernel, "Nenhum processo ativo para matar.");
+			}
+
             } else if (bufferedChar == "infoprocess") {
                 info_process();
             } else if (bufferedChar == "quit") {
