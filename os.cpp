@@ -15,8 +15,6 @@
 #define PAGE_SIZE 4096 //4KB
 
 struct Process {
-    uint16_t base;
-    uint16_t limit;
     uint16_t pc;
     size_t pid;
     bool active;
@@ -63,20 +61,6 @@ void reset_cpu_state() {
     cpuSystem->set_pc(0);
 }
 
-uint16_t allocate_base(uint16_t required_limit) {
-    uint16_t last_process_end = 0;
-    for (const auto& p : process_table) {
-        if (p.active) {
-            last_process_end = std::max(last_process_end, static_cast<uint16_t>(p.base + p.limit));
-        }
-    }
-    last_process_end = (last_process_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    if (last_process_end + required_limit > max_size) {
-        throw std::runtime_error("Memória insuficiente para o prÃƒÂ³ximo processo.");
-    }
-    return last_process_end;
-}
-	
 void sleep_process(uint16_t seconds) {
     Process& proc = process_table.back();
     proc.sleep_time = seconds;
@@ -101,28 +85,13 @@ uint16_t allocate_physical_frame() {
 }
 
 
-uint16_t allocate_pages(uint16_t required_limit, Process& proc) {
-    uint16_t num_pages = (required_limit + PAGE_SIZE - 1) / PAGE_SIZE;  
-
-    uint16_t last_process_end = 0;
-    for (const auto& p : process_table) {
-        if (p.active) {
-            last_process_end = std::max(last_process_end, static_cast<uint16_t>(p.base + p.limit));
-        }
-    }
-
-    if (last_process_end + num_pages * PAGE_SIZE > max_size) {
-        throw std::runtime_error("Memória insuficiente para o prÃ³ximo processo.");
-    }
-
+void allocate_pages(uint16_t required_limit, Process& proc) {
+    uint16_t num_pages = (required_limit + PAGE_SIZE - 1) / PAGE_SIZE;
 
     for (uint16_t i = 0; i < num_pages; ++i) {
-        uint16_t physical_page = allocate_physical_frame();  
+        uint16_t physical_page = allocate_physical_frame();
         proc.page_table.push_back(physical_page);  
     }
-
-    proc.limit = num_pages * PAGE_SIZE;  
-    return last_process_end;
 }
 
 void check_sleep() {
@@ -143,14 +112,14 @@ void vmem_write(uint16_t addr, uint16_t value, const Process& proc) {
     uint16_t offset = addr % PAGE_SIZE;
 
     if (page_num >= proc.page_table.size()) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Erro: Pagina não mapeada.");
-        return; 
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Erro: Acesso à página não mapeada.");
+        return;
     }
 
     uint16_t physical_page_base = proc.page_table[page_num];
-    uint16_t physical_addr = physical_page_base + offset;
+    uint16_t physical_addr = physical_page_base * PAGE_SIZE + offset;
 
-    cpuSystem->pmem_write(physical_addr, value); 
+    cpuSystem->pmem_write(physical_addr, value);
 }
 
 uint16_t vmem_read(uint16_t addr, const Process& proc) {
@@ -158,8 +127,8 @@ uint16_t vmem_read(uint16_t addr, const Process& proc) {
     uint16_t offset = addr % PAGE_SIZE;
 
     if (page_num >= proc.page_table.size()) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Erro: Pagina não mapeada.");
-        return 0;  
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Erro: Acesso à página não mapeada.");
+        return 0;
     }
 
     uint16_t physical_page_base = proc.page_table[page_num];
@@ -172,47 +141,43 @@ uint16_t vmem_read(uint16_t addr, const Process& proc) {
 void kill_process(Process& proc) {
     if (!proc.active) return;
 
-    for (uint16_t i = 0; i < proc.limit; ++i) {
-        vmem_write(i + proc.base, 0, proc);
-    }
     terminalSystem->println(Arch::Terminal::Type::Kernel, "Finalizando o processo ativo");
     proc.page_table.clear();
     proc.active = false;
-    reset_cpu_state();
+    reset_cpu_state(); 
 }
-
 void load_program(const std::string_view binary_file) {
     reset_cpu_state();
+    
     if (!process_table.empty() && process_table.back().active) {
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Finalizando o processo ativo antes de carregar um novo.");
         kill_process(process_table.back());
     }
 
-    Process new_process;
-    new_process.limit = get_process_limit(binary_file);
-    new_process.base = allocate_base(new_process.limit);
-    new_process.pc = new_process.base;
-    new_process.active = true;
-    std::fill(new_process.registers.begin(), new_process.registers.end(), 0);
 
+    Process new_process;
+    std::fill(new_process.registers.begin(), new_process.registers.end(), 0);
     std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer(binary_file);
 
-    allocate_pages(new_process.limit, new_process);
-    for (uint16_t i = 0; i < loadBinary.size(); ++i) {
-        if (i + new_process.base >= new_process.base + new_process.limit) {
-            terminalSystem->println(Arch::Terminal::Type::Kernel, "Binário passou a memória limite.");
-            break;
-        }
 
-        terminalSystem->println(Arch::Terminal::Type::App, i, "- ", loadBinary[i]);
-        vmem_write(i + new_process.base, loadBinary[i], new_process);
+    uint16_t required_limit = loadBinary.size();
+    allocate_pages(required_limit, new_process);
+
+
+    for (uint16_t i = 0; i < loadBinary.size(); ++i) {
+        uint16_t page_num = i / PAGE_SIZE;
+        uint16_t offset = i % PAGE_SIZE;
+        uint16_t physical_page = new_process.page_table[page_num];
+        uint16_t physical_addr = physical_page * PAGE_SIZE + offset;
+
+        cpuSystem->pmem_write(physical_addr, loadBinary[i]);
     }
 
 
-    cpuSystem->set_vmem_paddr_init(new_process.base);
-    cpuSystem->set_vmem_paddr_end(new_process.base + new_process.limit);
-
     process_table.push_back(new_process);
+
+    cpuSystem->set_vmem_paddr_init(new_process.page_table.front() * PAGE_SIZE);
+    cpuSystem->set_vmem_paddr_end(new_process.page_table.back() * PAGE_SIZE + PAGE_SIZE - 1);
 }
 
 
@@ -231,21 +196,20 @@ void boot(Arch::Terminal *terminal, Arch::Cpu *cpu) {
 
 
 void info_process() {
-    terminalSystem->println(Arch::Terminal::Type::Kernel, "InformaÃ§Ãµes do processo:");
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "Informações do processo:");
     if (!process_table.empty()) {
         const Process& proc = process_table.back();
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Base: ", proc.base);
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Limite: ", proc.limit);
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "PC: ",  proc.pc);
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Número de páginas: ", proc.page_table.size());
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "PC: ", proc.pc);
     } else {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Nenhum processo em execuÃ§Ã£o.");
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Nenhum processo em execução.");
     }
 }
 
 void interrupt(const Arch::InterruptCode interrupt) {
 		
     if (interrupt == Arch::InterruptCode::GPF) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral de proteÃ§Ã£o (GPF). Finalizando o processo.");
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Falha geral de proteção (GPF). Finalizando o processo.");
 
         if (!process_table.empty() && process_table.back().active) {
             kill_process(process_table.back());
