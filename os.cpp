@@ -35,6 +35,7 @@ Arch::Cpu *cpuSystem;
 uint16_t max_size = 65535;
 uint32_t uptime_seconds = 0;
 
+
 static std::string bufferedChar;
 
 std::vector<Process> process_table;  
@@ -43,7 +44,7 @@ uint16_t get_process_limit(const std::string_view fname) {
     uint32_t file_size_words = Lib::get_file_size_words(fname);
     
     if (file_size_words > max_size) { 
-        throw std::runtime_error("O arquivo excedeu o limite mÃ¡ximo da memÃ³ria do processo.");
+        throw std::runtime_error("O arquivo excedeu o limite máximo da memória do processo.");
     }
     
     return static_cast<uint16_t>(file_size_words);
@@ -69,8 +70,9 @@ uint16_t allocate_base(uint16_t required_limit) {
             last_process_end = std::max(last_process_end, static_cast<uint16_t>(p.base + p.limit));
         }
     }
+    last_process_end = (last_process_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     if (last_process_end + required_limit > max_size) {
-        throw std::runtime_error("MemÃ³ria insuficiente para o prÃ³ximo processo.");
+        throw std::runtime_error("Memória insuficiente para o prÃƒÂ³ximo processo.");
     }
     return last_process_end;
 }
@@ -89,8 +91,15 @@ uint32_t get_uptime() {
 
 uint16_t allocate_physical_frame() {
     static uint16_t next_frame = 0;
-    return next_frame++; 
+    static const uint16_t MAX_FRAMES = 1024;
+
+    if (next_frame >= MAX_FRAMES) {
+        throw std::runtime_error("Número máximo de frames físicos alcançado.");
+    }
+
+    return next_frame++;
 }
+
 
 uint16_t allocate_pages(uint16_t required_limit, Process& proc) {
     uint16_t num_pages = (required_limit + PAGE_SIZE - 1) / PAGE_SIZE;  
@@ -103,7 +112,7 @@ uint16_t allocate_pages(uint16_t required_limit, Process& proc) {
     }
 
     if (last_process_end + num_pages * PAGE_SIZE > max_size) {
-        throw std::runtime_error("Memória insuficiente para o próximo processo.");
+        throw std::runtime_error("Memória insuficiente para o prÃ³ximo processo.");
     }
 
 
@@ -134,7 +143,7 @@ void vmem_write(uint16_t addr, uint16_t value, const Process& proc) {
     uint16_t offset = addr % PAGE_SIZE;
 
     if (page_num >= proc.page_table.size()) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Page not mapped.");
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Erro: Pagina não mapeada.");
         return; 
     }
 
@@ -149,12 +158,12 @@ uint16_t vmem_read(uint16_t addr, const Process& proc) {
     uint16_t offset = addr % PAGE_SIZE;
 
     if (page_num >= proc.page_table.size()) {
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "Error: Page not mapped.");
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Erro: Pagina não mapeada.");
         return 0;  
     }
 
     uint16_t physical_page_base = proc.page_table[page_num];
-    uint16_t physical_addr = physical_page_base + offset;
+    uint16_t physical_addr = physical_page_base * PAGE_SIZE + offset;
 
     return cpuSystem->pmem_read(physical_addr);
 }
@@ -167,6 +176,7 @@ void kill_process(Process& proc) {
         vmem_write(i + proc.base, 0, proc);
     }
     terminalSystem->println(Arch::Terminal::Type::Kernel, "Finalizando o processo ativo");
+    proc.page_table.clear();
     proc.active = false;
     reset_cpu_state();
 }
@@ -187,6 +197,7 @@ void load_program(const std::string_view binary_file) {
 
     std::vector<uint16_t> loadBinary = Lib::load_from_disk_to_16bit_buffer(binary_file);
 
+    allocate_pages(new_process.limit, new_process);
     for (uint16_t i = 0; i < loadBinary.size(); ++i) {
         if (i + new_process.base >= new_process.base + new_process.limit) {
             terminalSystem->println(Arch::Terminal::Type::Kernel, "Binário passou a memória limite.");
@@ -197,7 +208,6 @@ void load_program(const std::string_view binary_file) {
         vmem_write(i + new_process.base, loadBinary[i], new_process);
     }
 
-    allocate_pages(new_process.limit, new_process);
 
     cpuSystem->set_vmem_paddr_init(new_process.base);
     cpuSystem->set_vmem_paddr_end(new_process.base + new_process.limit);
@@ -327,6 +337,8 @@ void syscall() {
             break;
         case 3: {
             int number = cpuSystem->get_gpr(1);
+            number += 1;
+            cpuSystem->set_gpr(1, number);
             terminalSystem->print(Arch::Terminal::Type::App, number);
             break;
         }
