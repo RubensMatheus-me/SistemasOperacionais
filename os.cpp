@@ -86,6 +86,9 @@ uint16_t allocate_physical_frame() {
 void allocate_pages(uint16_t required_limit, Process& proc) {
     uint16_t num_pages = (required_limit + PAGE_SIZE - 1) / PAGE_SIZE;
 
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "Tamanho do binário: ", required_limit);
+    terminalSystem->println(Arch::Terminal::Type::Kernel, "Número de páginas necessárias: ", num_pages);
+
     for (uint16_t i = 0; i < num_pages; ++i) {
         uint16_t physical_page = allocate_physical_frame();
         proc.page_table.push_back(physical_page);  
@@ -137,7 +140,6 @@ uint16_t vmem_read(uint16_t addr, const Process& proc) {
 
 
 void kill_process(Process& proc) {
-	terminalSystem->println(Arch::Terminal::Type::Kernel, proc.active);
     //if (!proc.active) return; 
 
     terminalSystem->println(Arch::Terminal::Type::Kernel, "Finalizando o processo ativo");
@@ -171,11 +173,13 @@ void load_program(const std::string_view binary_file) {
         cpuSystem->pmem_write(physical_addr, loadBinary[i]);
     }
 
+    new_process.pc = new_process.page_table.front() * PAGE_SIZE;
+
     process_table.push_back(new_process);
 
     cpuSystem->set_vmem_paddr_init(new_process.page_table.front() * PAGE_SIZE);
     cpuSystem->set_vmem_paddr_end(new_process.page_table.back() * PAGE_SIZE + PAGE_SIZE - 1);
-}
+    }
 
 void boot(Arch::Terminal *terminal, Arch::Cpu *cpu) {
     terminalSystem = terminal;
@@ -193,13 +197,23 @@ void boot(Arch::Terminal *terminal, Arch::Cpu *cpu) {
 
 void info_process() {
     terminalSystem->println(Arch::Terminal::Type::Kernel, "Informações do processo:");
+
     if (!process_table.empty()) {
         const Process& proc = process_table.back();
+        
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Número de páginas: ", proc.page_table.size());
-        terminalSystem->println(Arch::Terminal::Type::Kernel, "PC: ", proc.pc);
+
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "PC (Contador de Programa): ", proc.pc);
+
+        terminalSystem->println(Arch::Terminal::Type::Kernel, "Páginas alocadas: ");
+        for (const auto& page : proc.page_table) {
+            terminalSystem->println(Arch::Terminal::Type::Kernel, "Página: ", page);
+        }
+
     } else {
         terminalSystem->println(Arch::Terminal::Type::Kernel, "Nenhum processo em execução.");
     }
+
 }
 
 void interrupt(const Arch::InterruptCode interrupt) {
